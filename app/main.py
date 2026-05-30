@@ -1,40 +1,47 @@
+# app/main.py
 """
-ASR Media Service
-==================
-Extracts audio from video, splits into chunks for parallel transcription.
-Runs as a background worker — no HTTP server.
-
-Run:
-  python -m app.main
+Media worker entrypoint.
+Builds Kafka consumer + producer, S3 client, processing service, worker service,
+runs the consumer loop until interrupted.
 """
 import asyncio
-from app.Config import config
-from app import Redis_client as rc
-from app.Worker import process_task
+
+from app.Config.Config import config
+from app.Config.Kafka import get_producer, make_consumer, close_producer
+from app.Repositories import EventConsumer, EventPublisher, S3Client
+from app.Services import MediaProcessingService, MediaWorkerService
 
 
-async def main():
-    """Main worker loop."""
+async def main() -> None:
     print("Starting Media Service...")
-    await rc.init_redis()
-    print("  Redis connected")
-    print("Media Service ready. Waiting for tasks...")
 
+    producer = await get_producer()
+    publisher = EventPublisher(producer)
+
+    consumer = EventConsumer(
+        make_consumer(
+            topics=[config.TOPIC_MEDIA_TASKS],
+            group_id=config.GROUP_MEDIA_WORKER,
+        )
+    )
+
+    s3 = S3Client()
+    processing = MediaProcessingService()
+
+    worker = MediaWorkerService(
+        consumer=consumer,
+        publisher=publisher,
+        s3=s3,
+        processing=processing,
+    )
+
+    print("Media Service ready.")
     try:
-        while True:
-            try:
-                message = await rc.pop_media_task(timeout=5)
-                if message:
-                    print(f"  [MEDIA] Received task for job {message.get('job_id')}")
-                    await process_task(message)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                print(f"  [MEDIA] Error: {e}")
-                await asyncio.sleep(1)
+        await worker.run()
+    except KeyboardInterrupt:
+        pass
     finally:
-        print("Shutting down Media Service...")
-        await rc.close_redis()
+        await close_producer()
         print("Media Service stopped.")
 
 
