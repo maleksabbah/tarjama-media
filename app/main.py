@@ -6,9 +6,11 @@ runs the consumer loop until interrupted.
 """
 import asyncio
 
+import httpx
+
 from app.Config.Config import config
 from app.Config.Kafka import get_producer, make_consumer, close_producer
-from app.Repositories import EventConsumer, EventPublisher, S3Client
+from app.Repositories import EventConsumer, EventPublisher, S3Client, StorageClient
 from app.Services import MediaProcessingService, MediaWorkerService
 
 
@@ -27,11 +29,14 @@ async def main() -> None:
 
     s3 = S3Client()
     processing = MediaProcessingService()
+    http_client = httpx.AsyncClient(timeout=10.0)
+    storage = StorageClient(http_client)
 
     worker = MediaWorkerService(
         consumer=consumer,
         publisher=publisher,
         s3=s3,
+        storage=storage,
         processing=processing,
     )
 
@@ -41,6 +46,7 @@ async def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        await http_client.aclose()
         await close_producer()
         print("Media Service stopped.")
 
